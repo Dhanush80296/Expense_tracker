@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Expense Tracker - Signup</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="auth-body">
+  <div class="auth-card">
+    <h1>Create Account</h1>
+    <p class="muted">Start tracking your expenses.</p>
+    <form id="signupForm">
+      <label>Full Name</label>
+      <input id="signupName" required>
+      <label>Email</label>
+      <input id="signupEmail" type="email" required>
+      <label>Password</label>
+      <input id="signupPassword" type="password" minlength="4" required>
+      <button class="btn primary" type="submit">Sign Up</button>
+    </form>
+    <p id="signupMessage" class="message"></p>
+    <p>Already have an account? <a href="index.html">Login</a></p>
+  </div>
+  <script src="js/auth.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>User Dashboard</title><link rel="stylesheet" href="../css/style.css"></head>
+<body><div class="app"><aside class="sidebar"><h2>Expense Tracker</h2><nav><a class="active" href="dashboard.html">Dashboard</a><a href="add-expense.html">Add Transaction</a><a href="expenses.html">Transactions</a><a href="budget.html">Budget</a><a href="reports.html">Reports</a><a href="#" onclick="logout()">Logout</a></nav></aside>
+<main class="content"><div class="topbar"><h1>Dashboard</h1><span id="welcome"></span></div>
+<div class="cards"><div class="card"><h3>Total Income</h3><div id="income" class="amount">₹0</div></div><div class="card"><h3>Total Expenses</h3><div id="expense" class="amount">₹0</div></div><div class="card"><h3>Balance</h3><div id="balance" class="amount">₹0</div></div><div class="card"><h3>Transactions</h3><div id="count" class="amount">0</div></div></div>
+<div class="grid-2"><section class="form-card"><h2>Monthly Expense Chart</h2><div id="chart" class="chart"></div></section><section class="form-card"><h2>Recent Transactions</h2><div id="recent"></div></section></div></main></div>
+<script src="../js/common.js"></script><script>
+const u=requireRole('user'); if(u){welcome.textContent='Welcome, '+u.name;render();}
+function render(){const all=getExpenses().filter(x=>x.email===u.email);const inc=all.filter(x=>x.type==='income').reduce((s,x)=>s+Number(x.amount),0);const exp=all.filter(x=>x.type==='expense').reduce((s,x)=>s+Number(x.amount),0);income.textContent=money(inc);expense.textContent=money(exp);balance.textContent=money(inc-exp);count.textContent=all.length;
+recent.innerHTML=all.length?all.slice(-5).reverse().map(x=>`<p><b>${x.title}</b> - ${money(x.amount)} <span class="badge ${x.type}">${x.type}</span></p>`).join(''):'<div class="empty">No transactions yet.</div>';
+const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'], vals=months.map((_,i)=>all.filter(x=>x.type==='expense'&&new Date(x.date).getMonth()===i).reduce((s,x)=>s+Number(x.amount),0));const max=Math.max(...vals,1);chart.innerHTML=vals.map((v,i)=>`<div class="bar" style="height:${Math.max(v/max*170,5)}px"><small>${money(v)}</small><span>${months[i]}</span></div>`).join('')}
+</script></body></html>
