@@ -1,110 +1,309 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from "react";
 import {
   useNavigate,
   useLocation,
   Navigate,
   Link
-} from 'react-router-dom';
+} from "react-router-dom";
 
-import './style.css';
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  onAuthStateChanged,
+  signOut
+} from "firebase/auth";
 
-const ADMIN = 'admin@expense.com';
+import {
+  collection,
+  doc,
+  setDoc,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  query,
+  where,
+  getDoc,
+  serverTimestamp
+} from "firebase/firestore";
 
-const read = (key, fallback) => {
-  try {
-    return JSON.parse(localStorage.getItem(key)) ?? fallback;
-  } catch {
-    return fallback;
-  }
-};
+import { auth, db } from "./firebase";
+import "./style.css";
 
-const write = (key, val) =>
-  localStorage.setItem(key, JSON.stringify(val));
-
-const users = () => read('expenseUsers', []);
-const transactions = () => read('expenseData', []);
-const budgets = () => read('expenseBudgets', {});
-
-const money = n => '₹' + Number(n || 0).toFixed(2);
-const current = () => read('currentUser', null);
+const ADMIN_EMAIL = "dharmarevu66@gmail.com";
 
 const cats = [
-  'Food',
-  'Travel',
-  'Education',
-  'Shopping',
-  'Bills',
-  'Health',
-  'Entertainment',
-  'Other'
+  "Food",
+  "Travel",
+  "Education",
+  "Shopping",
+  "Bills",
+  "Health",
+  "Entertainment",
+  "Other"
 ];
 
-// ==================== MAIN APP ====================
+const money = n => "₹" + Number(n || 0).toFixed(2);
+
+// ==========================================
+// MAIN APP
+// ==========================================
 
 function App() {
-  const [session, setSession] = useState(current());
-  const [tick, setTick] = useState(0);
+  const [session, setSession] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authError, setAuthError] = useState("");
+
+  const [users, setUsers] = useState([]);
+  const [allTransactions, setAllTransactions] = useState([]);
+  const [budget, setBudget] = useState(0);
+
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const nav = useNavigate();
   const loc = useLocation();
 
-  const refresh = () => setTick(t => t + 1);
+  const isAdmin = session?.role === "admin";
 
-  const logout = () => {
-    localStorage.removeItem('currentUser');
-    setSession(null);
-    nav('/');
+  const rolePath = loc.pathname.startsWith("/admin")
+    ? "admin"
+    : "user";
+
+  // Firebase authentication listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      async firebaseUser => {
+        try {
+          setAuthError("");
+
+          if (!firebaseUser) {
+            setSession(null);
+            return;
+          }
+
+          const email = (firebaseUser.email || "").toLowerCase();
+
+          const role =
+            email === ADMIN_EMAIL ? "admin" : "user";
+
+          const profileRef = doc(db, "users", firebaseUser.uid);
+
+          const profile = await getDoc(profileRef);
+
+          const profileData = profile.exists()
+            ? profile.data()
+            : {};
+
+          const userData = {
+            uid: firebaseUser.uid,
+            name:
+              profileData.name ||
+              (role === "admin"
+                ? "Administrator"
+                : email.split("@")[0]),
+            email,
+            role
+          };
+
+          if (!profile.exists()) {
+            await setDoc(profileRef, {
+              ...userData,
+              createdAt: serverTimestamp()
+            });
+          }
+
+          setSession(userData);
+
+        } catch (error) {
+          console.error("Authentication error:", error);
+          setAuthError(error.message);
+          setSession(null);
+
+        } finally {
+          setAuthReady(true);
+        }
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // Firestore real-time listeners
+  useEffect(() => {
+    if (!session) {
+      setUsers([]);
+      setAllTransactions([]);
+      setBudget(0);
+      return;
+    }
+
+    const transactionsRef = collection(db, "transactions");
+
+    const txQuery = isAdmin
+      ? transactionsRef
+      : query(
+          transactionsRef,
+          where("uid", "==", session.uid)
+        );
+
+    const unsubscribeTransactions = onSnapshot(
+      txQuery,
+      snapshot => {
+        setAllTransactions(
+          snapshot.docs.map(d => ({
+            id: d.id,
+            ...d.data()
+          }))
+        );
+      },
+      error => {
+        console.error("Transaction listener:", error);
+      }
+    );
+
+    let unsubscribeUsers = () => {};
+
+    if (isAdmin) {
+      unsubscribeUsers = onSnapshot(
+        collection(db, "users"),
+        snapshot => {
+          setUsers(
+            snapshot.docs.map(d => ({
+              uid: d.id,
+              ...d.data()
+            }))
+          );
+        },
+        error => {
+          console.error("Users listener:", error);
+        }
+      );
+    }
+
+    const budgetRef = doc(db, "budgets", session.uid);
+
+    const unsubscribeBudget = onSnapshot(
+      budgetRef,
+      snapshot => {
+        setBudget(
+          snapshot.exists()
+            ? Number(snapshot.data().amount || 0)
+            : 0
+        );
+      },
+      error => {
+        console.error("Budget listener:", error);
+      }
+    );
+
+    return () => {
+      unsubscribeTransactions();
+      unsubscribeUsers();
+      unsubscribeBudget();
+    };
+
+  }, [session, isAdmin, refreshKey]);
+
+  // Logout
+  const logout = async () => {
+    try {
+      await signOut(auth);
+      setSession(null);
+      nav("/");
+    } catch (error) {
+      alert(error.message);
+    }
   };
 
-  function login(u) {
-    write('currentUser', u);
-    setSession(u);
-    nav(u.role === 'admin' ? '/admin/dashboard' : '/user/dashboard');
+  if (!authReady) {
+    return (
+      <div className="auth-body">
+        <div className="auth-card">
+          Loading your account...
+        </div>
+      </div>
+    );
   }
 
-  if (loc.pathname === '/signup') {
-    return <Signup nav={nav} />;
+  if (authError) {
+    return (
+      <div className="auth-body">
+        <div className="auth-card">
+          <h2>Unable to load account</h2>
+          <p className="message warning">{authError}</p>
+          <button
+            className="btn primary"
+            onClick={() => window.location.reload()}
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
   }
 
-  if (loc.pathname === '/' || loc.pathname === '/index.html') {
-    return <Login login={login} />;
+  if (loc.pathname === "/signup") {
+    return <Signup />;
   }
 
-  const role = loc.pathname.startsWith('/admin') ? 'admin' : 'user';
-
-  if (!session || session.role !== role) {
-    return <Navigate to="/" replace />;
+  if (!session) {
+    return <Login />;
   }
 
-  const links = role === 'admin'
+  if (rolePath !== session.role) {
+    return (
+      <Navigate
+        to={
+          session.role === "admin"
+            ? "/admin/dashboard"
+            : "/user/dashboard"
+        }
+        replace
+      />
+    );
+  }
+
+  const links = isAdmin
     ? [
-        ['/admin/dashboard', 'Dashboard'],
-        ['/admin/users', 'Users'],
-        ['/admin/transactions', 'Transactions']
+        ["/admin/dashboard", "Dashboard"],
+        ["/admin/users", "Users"],
+        ["/admin/transactions", "Transactions"]
       ]
     : [
-        ['/user/dashboard', 'Dashboard'],
-        ['/user/add-expense', 'Add Transaction'],
-        ['/user/expenses', 'Transactions'],
-        ['/user/budget', 'Budget'],
-        ['/user/reports', 'Reports']
+        ["/user/dashboard", "Dashboard"],
+        ["/user/add-expense", "Add Transaction"],
+        ["/user/expenses", "Transactions"],
+        ["/user/budget", "Budget"],
+        ["/user/reports", "Reports"]
       ];
 
-  const page = loc.pathname.split('/').pop();
+  const page = loc.pathname.split("/").pop();
+
+  const myTransactions = allTransactions.filter(
+    t => t.uid === session.uid
+  );
+
+  const refresh = () => {
+    setRefreshKey(k => k + 1);
+  };
 
   return (
     <div className="app">
+
       <aside className="sidebar">
         <h2>
-          {role === 'admin' ? 'Admin Panel' : 'Expense Tracker'}
+          {isAdmin ? "Admin Panel" : "Expense Tracker"}
         </h2>
 
         <nav>
           {links.map(([path, label]) => (
             <Link
               key={path}
-              className={loc.pathname === path ? 'active' : ''}
+              className={
+                loc.pathname === path ? "active" : ""
+              }
               to={path}
             >
               {label}
@@ -124,83 +323,115 @@ function App() {
       </aside>
 
       <main className="content">
-        {role === 'admin' ? (
-          page === 'users' ? (
-            <AdminUsers refresh={refresh} />
-          ) : page === 'transactions' ? (
-            <AdminTransactions refresh={refresh} />
+
+        {isAdmin ? (
+          page === "users" ? (
+            <AdminUsers
+              users={users}
+              transactions={allTransactions}
+            />
+          ) : page === "transactions" ? (
+            <AdminTransactions
+              transactions={allTransactions}
+              users={users}
+              refresh={refresh}
+            />
           ) : (
-            <AdminDashboard />
+            <AdminDashboard
+              users={users}
+              transactions={allTransactions}
+            />
           )
+        ) : page === "add-expense" ? (
+          <AddTransaction session={session} />
+        ) : page === "expenses" ? (
+          <Transactions
+            session={session}
+            transactions={myTransactions}
+            refresh={refresh}
+          />
+        ) : page === "budget" ? (
+          <Budget
+            budget={budget}
+            session={session}
+            transactions={myTransactions}
+          />
+        ) : page === "reports" ? (
+          <Reports transactions={myTransactions} />
         ) : (
-          page === 'add-expense' ? (
-            <AddTransaction session={session} refresh={refresh} />
-          ) : page === 'expenses' ? (
-            <Transactions session={session} refresh={refresh} />
-          ) : page === 'budget' ? (
-            <Budget session={session} refresh={refresh} />
-          ) : page === 'reports' ? (
-            <Reports session={session} />
-          ) : (
-            <Dashboard session={session} />
-          )
+          <Dashboard
+            session={session}
+            transactions={myTransactions}
+          />
         )}
+
       </main>
     </div>
   );
 }
 
-// ==================== LOGIN ====================
+// ==========================================
+// LOGIN
+// ==========================================
 
-function Login({ login }) {
-  const [role, setRole] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [msg, setMsg] = useState('');
+function Login() {
+  const [role, setRole] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [msg, setMsg] = useState("");
 
-  function submit(e) {
+  const nav = useNavigate();
+
+  async function submit(e) {
     e.preventDefault();
 
     const em = email.trim().toLowerCase();
-    let u = null;
 
-    if (role === 'admin') {
-      if (em === ADMIN && password === 'admin123') {
-        u = {
-          name: 'Administrator',
-          email: ADMIN,
-          role: 'admin'
-        };
-      }
-    } else if (role === 'user') {
-      const found = users().find(
-        x => x.email === em && x.password === password
-      );
-
-      if (found) {
-        u = {
-          name: found.name,
-          email: found.email,
-          role: 'user'
-        };
-      }
-    }
-
-    if (!u) {
-      setMsg(
-        'Invalid ' +
-        (role === 'admin' ? 'admin' : 'user') +
-        ' email or password.'
-      );
+    if (role === "admin" && em !== ADMIN_EMAIL) {
+      setMsg("Please use the registered administrator email.");
       return;
     }
 
-    login(u);
+    if (role === "user" && em === ADMIN_EMAIL) {
+      setMsg("Please select Admin Login for this email.");
+      return;
+    }
+
+    try {
+      const result = await signInWithEmailAndPassword(
+        auth,
+        em,
+        password
+      );
+
+      const actualEmail = (
+        result.user.email || ""
+      ).toLowerCase();
+
+      if (
+        (role === "admin" && actualEmail !== ADMIN_EMAIL) ||
+        (role === "user" && actualEmail === ADMIN_EMAIL)
+      ) {
+        await signOut(auth);
+        setMsg("Incorrect account type selected.");
+        return;
+      }
+
+      nav(
+        role === "admin"
+          ? "/admin/dashboard"
+          : "/user/dashboard"
+      );
+
+    } catch (err) {
+      setMsg(authMessage(err));
+    }
   }
 
   return (
     <div className="auth-body">
       <div className="auth-card">
+
         <h1>Expense Tracker</h1>
 
         <p className="muted">
@@ -216,31 +447,37 @@ function Login({ login }) {
             </p>
 
             <div className="role-choices">
+
               <button
                 className="role-choice"
-                onClick={() => {
-                  setRole('admin');
-                  setMsg('');
-                }}
                 type="button"
+                onClick={() => {
+                  setRole("admin");
+                  setMsg("");
+                }}
               >
                 <span className="role-icon">A</span>
                 <strong>Admin Login</strong>
-                <small>Manage users and transactions</small>
+                <small>
+                  Manage users and transactions
+                </small>
               </button>
 
               <button
                 className="role-choice"
-                onClick={() => {
-                  setRole('user');
-                  setMsg('');
-                }}
                 type="button"
+                onClick={() => {
+                  setRole("user");
+                  setMsg("");
+                }}
               >
                 <span className="role-icon">U</span>
                 <strong>User Login</strong>
-                <small>Track expenses and budgets</small>
+                <small>
+                  Track expenses and budgets
+                </small>
               </button>
+
             </div>
 
             <p>
@@ -251,17 +488,19 @@ function Login({ login }) {
           <>
             <div className="role-heading">
               <h2>
-                {role === 'admin' ? 'Admin Login' : 'User Login'}
+                {role === "admin"
+                  ? "Admin Login"
+                  : "User Login"}
               </h2>
 
               <button
                 className="btn secondary"
                 type="button"
                 onClick={() => {
-                  setRole('');
-                  setEmail('');
-                  setPassword('');
-                  setMsg('');
+                  setRole("");
+                  setEmail("");
+                  setPassword("");
+                  setMsg("");
                 }}
               >
                 Change role
@@ -288,7 +527,7 @@ function Login({ login }) {
               />
 
               <button className="btn primary">
-                Login as {role === 'admin' ? 'Admin' : 'User'}
+                Login as {role === "admin" ? "Admin" : "User"}
               </button>
             </form>
 
@@ -296,60 +535,78 @@ function Login({ login }) {
               {msg}
             </p>
 
-            {role === 'admin' ? (
-              <div className="demo-box">
-                <b>Admin demo credentials</b>
-                <br />
-                Email: admin@expense.com
-                <br />
-                Password: admin123
-              </div>
-            ) : (
+            {role === "user" && (
               <p>
                 New user? <Link to="/signup">Create an account</Link>
               </p>
             )}
+
+            {role === "admin" && (
+              <div className="demo-box">
+                Admin account: {ADMIN_EMAIL}
+                <br />
+                Use the password you set in Firebase Authentication.
+              </div>
+            )}
           </>
         )}
+
       </div>
     </div>
   );
 }
 
-// ==================== SIGNUP ====================
+// ==========================================
+// SIGNUP
+// ==========================================
 
-function Signup({ nav }) {
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [msg, setMsg] = useState('');
+function Signup() {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [msg, setMsg] = useState("");
 
-  function submit(e) {
+  const nav = useNavigate();
+
+  async function submit(e) {
     e.preventDefault();
 
     const em = email.trim().toLowerCase();
 
-    if (em === ADMIN || users().some(u => u.email === em)) {
-      return setMsg('Email already registered.');
+    if (em === ADMIN_EMAIL) {
+      setMsg("This email is reserved for the administrator.");
+      return;
     }
 
-    write('expenseUsers', [
-      ...users(),
-      {
-        id: Date.now(),
-        name: name.trim(),
-        email: em,
-        password,
-        createdAt: new Date().toISOString()
-      }
-    ]);
+    try {
+      const credential = await createUserWithEmailAndPassword(
+        auth,
+        em,
+        password
+      );
 
-    nav('/');
+      await setDoc(
+        doc(db, "users", credential.user.uid),
+        {
+          uid: credential.user.uid,
+          name: name.trim(),
+          email: em,
+          role: "user",
+          createdAt: serverTimestamp()
+        }
+      );
+
+      nav("/user/dashboard");
+
+    } catch (err) {
+      setMsg(authMessage(err));
+    }
   }
 
   return (
     <div className="auth-body">
       <div className="auth-card">
+
         <h1>Create Account</h1>
 
         <p className="muted">
@@ -357,6 +614,7 @@ function Signup({ nav }) {
         </p>
 
         <form onSubmit={submit}>
+
           <label>Full Name</label>
 
           <input
@@ -378,7 +636,7 @@ function Signup({ nav }) {
 
           <input
             type="password"
-            minLength="4"
+            minLength="6"
             value={password}
             onChange={e => setPassword(e.target.value)}
             required
@@ -387,6 +645,7 @@ function Signup({ nav }) {
           <button className="btn primary">
             Sign Up
           </button>
+
         </form>
 
         <p className="message warning">{msg}</p>
@@ -394,37 +653,64 @@ function Signup({ nav }) {
         <p>
           Already have an account? <Link to="/">Login</Link>
         </p>
+
       </div>
     </div>
   );
 }
 
-// ==================== USER DASHBOARD ====================
+// ==========================================
+// ERROR MESSAGES
+// ==========================================
 
-function Dashboard({ session }) {
-  const a = transactions().filter(
-    x => x.email === session.email
-  );
+function authMessage(err) {
+  const messages = {
+    "auth/email-already-in-use":
+      "This email is already registered. Please log in.",
+
+    "auth/invalid-credential":
+      "Incorrect email or password.",
+
+    "auth/weak-password":
+      "Password must contain at least 6 characters.",
+
+    "auth/invalid-email":
+      "Please enter a valid email address.",
+
+    "auth/network-request-failed":
+      "Network error. Check your internet connection."
+  };
+
+  return messages[err.code] || err.message || "Something went wrong.";
+}
+
+// ==========================================
+// USER DASHBOARD
+// ==========================================
+
+function Dashboard({ session, transactions }) {
+  const a = transactions;
 
   const inc = a
-    .filter(x => x.type === 'income')
+    .filter(x => x.type === "income")
     .reduce((s, x) => s + Number(x.amount), 0);
 
   const exp = a
-    .filter(x => x.type === 'expense')
+    .filter(x => x.type === "expense")
     .reduce((s, x) => s + Number(x.amount), 0);
 
   const months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
   ];
 
   const vals = months.map((_, i) =>
     a
       .filter(
         x =>
-          x.type === 'expense' &&
-          new Date(x.date).getMonth() === i
+          x.type === "expense" &&
+          new Date(x.date).getMonth() === i &&
+          new Date(x.date).getFullYear() === new Date().getFullYear()
       )
       .reduce((s, x) => s + Number(x.amount), 0)
   );
@@ -440,10 +726,10 @@ function Dashboard({ session }) {
 
       <div className="cards">
         {[
-          ['Total Income', money(inc)],
-          ['Total Expenses', money(exp)],
-          ['Balance', money(inc - exp)],
-          ['Transactions', a.length]
+          ["Total Income", money(inc)],
+          ["Total Expenses", money(exp)],
+          ["Balance", money(inc - exp)],
+          ["Transactions", a.length]
         ].map(([label, value]) => (
           <div className="card" key={label}>
             <h3>{label}</h3>
@@ -453,6 +739,7 @@ function Dashboard({ session }) {
       </div>
 
       <div className="grid-2">
+
         <section className="form-card">
           <h2>Monthly Expense Chart</h2>
 
@@ -462,7 +749,7 @@ function Dashboard({ session }) {
                 key={i}
                 className="bar"
                 style={{
-                  height: Math.max(v / max * 170, 5) + 'px'
+                  height: Math.max((v / max) * 170, 5) + "px"
                 }}
               >
                 <small>{money(v)}</small>
@@ -476,51 +763,64 @@ function Dashboard({ session }) {
           <h2>Recent Transactions</h2>
 
           {a.length ? (
-            a.slice(-5).reverse().map(x => (
-              <p key={x.id}>
-                <b>{x.title}</b> - {money(x.amount)}
-                {' '}
-                <span className={'badge ' + x.type}>
-                  {x.type}
-                </span>
-              </p>
-            ))
+            [...a]
+              .sort((x, y) =>
+                String(y.date).localeCompare(String(x.date))
+              )
+              .slice(0, 5)
+              .map(x => (
+                <p key={x.id}>
+                  <b>{x.title}</b> - {money(x.amount)}
+                  {" "}
+                  <span className={"badge " + x.type}>
+                    {x.type}
+                  </span>
+                </p>
+              ))
           ) : (
             <div className="empty">No transactions yet.</div>
           )}
         </section>
+
       </div>
     </>
   );
 }
 
-// ==================== ADD TRANSACTION ====================
+// ==========================================
+// ADD TRANSACTION
+// ==========================================
 
-function AddTransaction({ session, refresh }) {
-  const [msg, setMsg] = useState('');
+function AddTransaction({ session }) {
+  const [msg, setMsg] = useState("");
 
-  function submit(e) {
+  async function submit(e) {
     e.preventDefault();
 
-    const f = new FormData(e.currentTarget);
+    const form = e.currentTarget;
+    const f = new FormData(form);
 
-    write('expenseData', [
-      ...transactions(),
-      {
-        id: Date.now(),
+    try {
+      await addDoc(collection(db, "transactions"), {
+        uid: session.uid,
         email: session.email,
-        type: f.get('type'),
-        title: f.get('title'),
-        amount: Number(f.get('amount')),
-        category: f.get('category'),
-        date: f.get('date'),
-        note: f.get('note')
-      }
-    ]);
+        userName: session.name,
+        type: f.get("type"),
+        title: f.get("title"),
+        amount: Number(f.get("amount")),
+        category: f.get("category"),
+        date: f.get("date"),
+        note: f.get("note") || "",
+        createdAt: serverTimestamp()
+      });
 
-    e.currentTarget.reset();
-    setMsg('Transaction saved successfully.');
-    refresh();
+      form.reset();
+      setMsg("Transaction saved successfully.");
+
+    } catch (err) {
+      console.error(err);
+      setMsg("Could not save transaction: " + err.message);
+    }
   }
 
   return (
@@ -528,7 +828,9 @@ function AddTransaction({ session, refresh }) {
       <h1>Add Transaction</h1>
 
       <section className="form-card">
+
         <form onSubmit={submit}>
+
           <label>Type</label>
 
           <select name="type">
@@ -567,7 +869,7 @@ function AddTransaction({ session, refresh }) {
           <input
             name="date"
             type="date"
-            defaultValue={new Date().toLocaleDateString('en-CA')}
+            defaultValue={new Date().toLocaleDateString("en-CA")}
             required
           />
 
@@ -578,64 +880,67 @@ function AddTransaction({ session, refresh }) {
           <button className="btn primary">
             Save Transaction
           </button>
+
         </form>
 
         <p className="success">{msg}</p>
+
       </section>
     </>
   );
 }
 
-// ==================== TRANSACTIONS ====================
+// ==========================================
+// USER TRANSACTIONS
+// ==========================================
 
-function Transactions({ session, refresh }) {
-  const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState('all');
+function Transactions({ session, transactions, refresh }) {
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
   const [editing, setEditing] = useState(null);
 
-  const a = transactions().filter(
+  const rows = transactions.filter(
     x =>
-      x.email === session.email &&
-      (filter === 'all' || x.type === filter) &&
+      (filter === "all" || x.type === filter) &&
       (
-        x.title.toLowerCase().includes(search.toLowerCase()) ||
-        x.category.toLowerCase().includes(search.toLowerCase())
+        (x.title || "").toLowerCase().includes(search.toLowerCase()) ||
+        (x.category || "").toLowerCase().includes(search.toLowerCase())
       )
   );
 
-  function del(id) {
-    if (!confirm('Delete transaction?')) return;
-
-    write(
-      'expenseData',
-      transactions().filter(x => x.id !== id)
-    );
-
-    refresh();
+  async function del(id) {
+    if (confirm("Delete transaction?")) {
+      try {
+        await deleteDoc(doc(db, "transactions", id));
+        refresh();
+      } catch (err) {
+        alert(err.message);
+      }
+    }
   }
 
-  function edit(e) {
+  async function edit(e) {
     e.preventDefault();
 
     const f = new FormData(e.currentTarget);
 
-    write(
-      'expenseData',
-      transactions().map(x =>
-        x.id === editing.id
-          ? {
-              ...x,
-              title: f.get('title'),
-              amount: Number(f.get('amount')),
-              category: f.get('category'),
-              date: f.get('date')
-            }
-          : x
-      )
-    );
+    try {
+      await updateDoc(
+        doc(db, "transactions", editing.id),
+        {
+          title: f.get("title"),
+          amount: Number(f.get("amount")),
+          category: f.get("category"),
+          date: f.get("date")
+        }
+      );
 
-    setEditing(null);
-    refresh();
+      setEditing(null);
+      refresh();
+
+    } catch (err) {
+      alert(err.message);
+    }
   }
 
   return (
@@ -643,6 +948,7 @@ function Transactions({ session, refresh }) {
       <h1>Transactions</h1>
 
       <div className="toolbar">
+
         <input
           placeholder="Search title/category"
           value={search}
@@ -657,6 +963,7 @@ function Transactions({ session, refresh }) {
           <option value="income">Income</option>
           <option value="expense">Expense</option>
         </select>
+
       </div>
 
       {editing && (
@@ -664,8 +971,8 @@ function Transactions({ session, refresh }) {
           <h2>Edit Transaction</h2>
 
           <form onSubmit={edit}>
-            <label>Title</label>
 
+            <label>Title</label>
             <input
               name="title"
               defaultValue={editing.title}
@@ -673,7 +980,6 @@ function Transactions({ session, refresh }) {
             />
 
             <label>Amount</label>
-
             <input
               name="amount"
               type="number"
@@ -684,7 +990,6 @@ function Transactions({ session, refresh }) {
             />
 
             <label>Category</label>
-
             <select
               name="category"
               defaultValue={editing.category}
@@ -695,7 +1000,6 @@ function Transactions({ session, refresh }) {
             </select>
 
             <label>Date</label>
-
             <input
               name="date"
               type="date"
@@ -714,12 +1018,14 @@ function Transactions({ session, refresh }) {
             >
               Cancel
             </button>
+
           </form>
         </section>
       )}
 
       <div className="table-wrap">
         <table className="table">
+
           <thead>
             <tr>
               <th>Date</th>
@@ -732,21 +1038,18 @@ function Transactions({ session, refresh }) {
           </thead>
 
           <tbody>
-            {a.length ? (
-              a.map(x => (
+            {rows.length ? (
+              rows.map(x => (
                 <tr key={x.id}>
                   <td>{x.date}</td>
                   <td>{x.title}</td>
                   <td>{x.category}</td>
-
                   <td>
-                    <span className={'badge ' + x.type}>
+                    <span className={"badge " + x.type}>
                       {x.type}
                     </span>
                   </td>
-
                   <td>{money(x.amount)}</td>
-
                   <td>
                     <button
                       className="btn secondary"
@@ -754,8 +1057,6 @@ function Transactions({ session, refresh }) {
                     >
                       Edit
                     </button>
-
-                    {' '}
 
                     <button
                       className="btn danger"
@@ -774,58 +1075,71 @@ function Transactions({ session, refresh }) {
               </tr>
             )}
           </tbody>
+
         </table>
       </div>
     </>
   );
 }
 
-// ==================== BUDGET ====================
+// ==========================================
+// BUDGET
+// ==========================================
 
-function Budget({ session, refresh }) {
-  const [budget, setBudget] = useState(
-    budgets()[session.email] || 0
-  );
+function Budget({ budget, session, transactions }) {
+  const [value, setValue] = useState(budget);
+  const [msg, setMsg] = useState("");
 
-  const [msg, setMsg] = useState('');
+  useEffect(() => {
+    setValue(budget);
+  }, [budget]);
 
-  const now = new Date();
+  const spent = transactions
+    .filter(x => {
+      const d = new Date(x.date);
+      const now = new Date();
 
-  const spent = transactions()
-    .filter(
-      x =>
-        x.email === session.email &&
-        x.type === 'expense' &&
-        new Date(x.date).getMonth() === now.getMonth() &&
-        new Date(x.date).getFullYear() === now.getFullYear()
-    )
-    .reduce((s, x) => s + Number(x.amount), 0);
+      return (
+        x.type === "expense" &&
+        d.getMonth() === now.getMonth() &&
+        d.getFullYear() === now.getFullYear()
+      );
+    })
+    .reduce((sum, x) => sum + Number(x.amount), 0);
+
+  async function save(e) {
+    e.preventDefault();
+
+    try {
+      await setDoc(
+        doc(db, "budgets", session.uid),
+        {
+          uid: session.uid,
+          amount: Number(value)
+        }
+      );
+
+      setMsg("Budget saved.");
+
+    } catch (err) {
+      setMsg("Could not save budget: " + err.message);
+    }
+  }
 
   return (
     <>
       <h1>Monthly Budget</h1>
 
       <section className="form-card">
-        <form
-          onSubmit={e => {
-            e.preventDefault();
 
-            write('expenseBudgets', {
-              ...budgets(),
-              [session.email]: Number(budget)
-            });
-
-            setMsg('Budget saved.');
-            refresh();
-          }}
-        >
+        <form onSubmit={save}>
           <label>Monthly Budget (₹)</label>
 
           <input
             type="number"
             min="0"
-            value={budget}
-            onChange={e => setBudget(e.target.value)}
+            value={value}
+            onChange={e => setValue(e.target.value)}
             required
           />
 
@@ -835,6 +1149,7 @@ function Budget({ session, refresh }) {
         </form>
 
         <p className="success">{msg}</p>
+
       </section>
 
       <section className="form-card">
@@ -845,59 +1160,49 @@ function Budget({ session, refresh }) {
         </p>
 
         <p>
-          Budget: <b>{money(budgets()[session.email] || 0)}</b>
+          Budget: <b>{money(budget)}</b>
         </p>
 
         <div className="progress">
           <div
             style={{
-              width: Math.min(
-                100,
-                budgets()[session.email]
-                  ? spent / budgets()[session.email] * 100
-                  : 0
-              ) + '%'
+              width:
+                Math.min(
+                  100,
+                  budget ? (spent / budget) * 100 : 0
+                ) + "%"
             }}
           />
         </div>
 
-        <p
-          className={
-            budgets()[session.email] &&
-            spent > budgets()[session.email]
-              ? 'warning'
-              : 'success'
-          }
-        >
-          {budgets()[session.email] &&
-          spent > budgets()[session.email]
-            ? 'Budget exceeded!'
-            : 'You are within your budget.'}
+        <p className={budget && spent > budget ? "warning" : "success"}>
+          {budget && spent > budget
+            ? "Budget exceeded!"
+            : "You are within your budget."}
         </p>
+
       </section>
     </>
   );
 }
 
-// ==================== REPORTS ====================
+// ==========================================
+// REPORTS
+// ==========================================
 
-function Reports({ session }) {
-  const a = transactions().filter(
-    x => x.email === session.email
-  );
-
-  const inc = a
-    .filter(x => x.type === 'income')
+function Reports({ transactions }) {
+  const inc = transactions
+    .filter(x => x.type === "income")
     .reduce((s, x) => s + Number(x.amount), 0);
 
-  const exp = a
-    .filter(x => x.type === 'expense')
+  const exp = transactions
+    .filter(x => x.type === "expense")
     .reduce((s, x) => s + Number(x.amount), 0);
 
   const groups = {};
 
-  a
-    .filter(x => x.type === 'expense')
+  transactions
+    .filter(x => x.type === "expense")
     .forEach(x => {
       groups[x.category] =
         (groups[x.category] || 0) + Number(x.amount);
@@ -905,8 +1210,8 @@ function Reports({ session }) {
 
   function exportCSV() {
     const rows = [
-      ['Date', 'Title', 'Category', 'Type', 'Amount', 'Note'],
-      ...a.map(x => [
+      ["Date", "Title", "Category", "Type", "Amount", "Note"],
+      ...transactions.map(x => [
         x.date,
         x.title,
         x.category,
@@ -918,22 +1223,22 @@ function Reports({ session }) {
 
     const csv = rows
       .map(r =>
-        r
-          .map(v => '"' + String(v ?? '').replaceAll('"', '""') + '"')
-          .join(',')
+        r.map(v =>
+          '"' + String(v ?? "").replaceAll('"', '""') + '"'
+        ).join(",")
       )
-      .join('\n');
+      .join("\n");
 
     const url = URL.createObjectURL(
-      new Blob([csv], { type: 'text/csv' })
+      new Blob([csv], { type: "text/csv" })
     );
 
-    const el = document.createElement('a');
+    const el = document.createElement("a");
     el.href = url;
-    el.download = 'expense-report.csv';
+    el.download = "expense-report.csv";
     el.click();
 
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -941,12 +1246,16 @@ function Reports({ session }) {
       <div className="topbar">
         <h1>Reports & Insights</h1>
 
-        <button className="btn primary" onClick={exportCSV}>
+        <button
+          className="btn primary"
+          onClick={exportCSV}
+        >
           Export CSV
         </button>
       </div>
 
       <div className="grid-2">
+
         <section className="form-card">
           <h2>Category Spending</h2>
 
@@ -967,85 +1276,70 @@ function Reports({ session }) {
           <p>Total income: <b>{money(inc)}</b></p>
           <p>Total expenses: <b>{money(exp)}</b></p>
           <p>Balance: <b>{money(inc - exp)}</b></p>
-          <p>Total transactions: <b>{a.length}</b></p>
+          <p>Total transactions: <b>{transactions.length}</b></p>
         </section>
+
       </div>
     </>
   );
 }
 
-// ==================== ADMIN DASHBOARD ====================
+// ==========================================
+// ADMIN DASHBOARD
+// ==========================================
 
-function AdminDashboard() {
-  const a = transactions();
+function AdminDashboard({ users, transactions }) {
+  const income = transactions
+    .filter(x => x.type === "income")
+    .reduce((s, x) => s + Number(x.amount), 0);
+
+  const expenses = transactions
+    .filter(x => x.type === "expense")
+    .reduce((s, x) => s + Number(x.amount), 0);
 
   return (
     <>
       <h1>Admin Dashboard</h1>
 
       <div className="cards">
+
         {[
-          ['Registered Users', users().length],
-          ['Transactions', a.length],
           [
-            'Total Income',
-            money(
-              a
-                .filter(x => x.type === 'income')
-                .reduce((s, x) => s + Number(x.amount), 0)
-            )
+            "Registered Users",
+            users.filter(u => u.role !== "admin").length
           ],
-          [
-            'Total Expenses',
-            money(
-              a
-                .filter(x => x.type === 'expense')
-                .reduce((s, x) => s + Number(x.amount), 0)
-            )
-          ]
+          ["Transactions", transactions.length],
+          ["Total Income", money(income)],
+          ["Total Expenses", money(expenses)]
         ].map(([k, v]) => (
           <div className="card" key={k}>
             <h3>{k}</h3>
             <div className="amount">{v}</div>
           </div>
         ))}
+
       </div>
 
       <section className="form-card">
         <h2>System Overview</h2>
 
         <p>
-          Admin can monitor registered users and all transactions
-          stored in this browser.
+          Admin can monitor registered users and all
+          transactions stored in the shared Firebase database.
         </p>
       </section>
     </>
   );
 }
 
-// ==================== ADMIN USERS ====================
+// ==========================================
+// ADMIN USERS
+// ==========================================
 
-function AdminUsers({ refresh }) {
-  function del(email) {
-    if (!confirm('Delete user and their transactions?')) return;
-
-    write(
-      'expenseUsers',
-      users().filter(x => x.email !== email)
-    );
-
-    write(
-      'expenseData',
-      transactions().filter(x => x.email !== email)
-    );
-
-    const b = budgets();
-    delete b[email];
-
-    write('expenseBudgets', b);
-
-    refresh();
-  }
+function AdminUsers({ users, transactions }) {
+  const normalUsers = users.filter(
+    u => u.role !== "admin"
+  );
 
   return (
     <>
@@ -1053,32 +1347,33 @@ function AdminUsers({ refresh }) {
 
       <div className="table-wrap">
         <table className="table">
+
           <thead>
             <tr>
               <th>Name</th>
               <th>Email</th>
               <th>Created</th>
-              <th>Action</th>
+              <th>Transactions</th>
             </tr>
           </thead>
 
           <tbody>
-            {users().length ? (
-              users().map(x => (
-                <tr key={x.id}>
-                  <td>{x.name}</td>
-                  <td>{x.email}</td>
+            {normalUsers.length ? (
+              normalUsers.map(u => (
+                <tr key={u.uid}>
+                  <td>{u.name}</td>
+                  <td>{u.email}</td>
+
                   <td>
-                    {new Date(x.createdAt).toLocaleDateString()}
+                    {u.createdAt?.toDate
+                      ? u.createdAt.toDate().toLocaleDateString()
+                      : "—"}
                   </td>
 
                   <td>
-                    <button
-                      className="btn danger"
-                      onClick={() => del(x.email)}
-                    >
-                      Delete
-                    </button>
+                    {transactions.filter(
+                      t => t.uid === u.uid
+                    ).length}
                   </td>
                 </tr>
               ))
@@ -1090,24 +1385,27 @@ function AdminUsers({ refresh }) {
               </tr>
             )}
           </tbody>
+
         </table>
       </div>
     </>
   );
 }
 
-// ==================== ADMIN TRANSACTIONS ====================
+// ==========================================
+// ADMIN ALL TRANSACTIONS
+// ==========================================
 
-function AdminTransactions({ refresh }) {
-  function del(id) {
-    if (!confirm('Delete transaction?')) return;
-
-    write(
-      'expenseData',
-      transactions().filter(x => x.id !== id)
-    );
-
-    refresh();
+function AdminTransactions({ transactions, users, refresh }) {
+  async function del(id) {
+    if (confirm("Delete this transaction?")) {
+      try {
+        await deleteDoc(doc(db, "transactions", id));
+        refresh();
+      } catch (err) {
+        alert(err.message);
+      }
+    }
   }
 
   return (
@@ -1116,6 +1414,7 @@ function AdminTransactions({ refresh }) {
 
       <div className="table-wrap">
         <table className="table">
+
           <thead>
             <tr>
               <th>Date</th>
@@ -1129,21 +1428,23 @@ function AdminTransactions({ refresh }) {
           </thead>
 
           <tbody>
-            {transactions().length ? (
-              transactions().map(x => (
+            {transactions.length ? (
+              transactions.map(x => (
                 <tr key={x.id}>
                   <td>{x.date}</td>
 
                   <td>
-                    {users().find(u => u.email === x.email)?.name ||
-                      x.email}
+                    {users.find(u => u.uid === x.uid)?.name ||
+                      x.userName ||
+                      x.email ||
+                      "Unknown"}
                   </td>
 
                   <td>{x.title}</td>
                   <td>{x.category}</td>
 
                   <td>
-                    <span className={'badge ' + x.type}>
+                    <span className={"badge " + x.type}>
                       {x.type}
                     </span>
                   </td>
@@ -1168,6 +1469,7 @@ function AdminTransactions({ refresh }) {
               </tr>
             )}
           </tbody>
+
         </table>
       </div>
     </>

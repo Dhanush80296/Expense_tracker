@@ -1,3 +1,8 @@
+<<<<<<< HEAD
 node_modules
 dist
 .env
+=======
+.DS_Store
+Thumbs.db
+>>>>>>> 0f77f5f21f53d2bb7a7db6f2d025ef9b5c57f4f0

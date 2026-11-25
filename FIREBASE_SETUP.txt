@@ -1,0 +1,27 @@
+EXPENSE TRACKER - FIREBASE CONNECTED VERSION
+
+1. Extract this ZIP.
+2. Open the project root folder (the folder containing package.json) in VS Code.
+3. Run: npm install
+4. Confirm src/firebase.js contains your Firebase web app config.
+5. In Firebase Console > Authentication > Users > Add user, create:
+   dharmarevu66@gmail.com
+   Use a strong password. Do not put the password in source code.
+6. In Firebase Console > Firestore Database > Rules, replace the rules with
+   the contents of firestore.rules and click Publish.
+7. Run: npm run dev
+8. Choose Admin Login and sign in with the email above and the password you set.
+9. Users should create accounts again through the app signup page. New registrations
+   and transactions will now be stored in the shared Firestore database.
+10. Deploy the updated project to Vercel. All devices using this deployed app will
+    use the same Firebase project.
+
+IMPORTANT:
+- The admin email is allowlisted in the app and Firestore rules. Only create this
+  account yourself in Firebase Authentication. Do not allow public signup with it.
+- Firebase Auth accounts created before this code can still sign in, but their
+  Firestore user profile is created at first login if permitted by the rules.
+- Old localStorage records are not automatically uploaded to Firestore.
+- This is a frontend-only student project. For a production system, use custom
+  claims set by a trusted server/Cloud Function rather than relying on an email
+  allowlist, and review rules/security before storing real financial information.
