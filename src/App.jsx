@@ -114,6 +114,11 @@ function App() {
             });
           }
 
+          // Save the most recent authenticated access time for the admin users list.
+          await setDoc(profileRef, {
+            lastAccessedAt: serverTimestamp()
+          }, { merge: true });
+
           setSession(userData);
 
         } catch (error) {
@@ -279,7 +284,9 @@ function App() {
         ["/user/reports", "Reports"]
       ];
 
-  const page = loc.pathname.split("/").pop();
+  const pathParts = loc.pathname.split("/").filter(Boolean);
+  const page = pathParts[1] || "";
+  const selectedUserId = pathParts[2] || "";
 
   const myTransactions = allTransactions.filter(
     t => t.uid === session.uid
@@ -325,7 +332,12 @@ function App() {
       <main className="content">
 
         {isAdmin ? (
-          page === "users" ? (
+          page === "users" && selectedUserId ? (
+            <AdminUserTransactions
+              user={users.find(u => u.uid === selectedUserId)}
+              transactions={allTransactions.filter(t => t.uid === selectedUserId)}
+            />
+          ) : page === "users" ? (
             <AdminUsers
               users={users}
               transactions={allTransactions}
@@ -1191,53 +1203,46 @@ function Budget({ budget, session, transactions }) {
 // ==========================================
 
 function Reports({ transactions }) {
-  const inc = transactions
-    .filter(x => x.type === "income")
+  const inc = transactions.filter(x => x.type === "income")
     .reduce((s, x) => s + Number(x.amount), 0);
-
-  const exp = transactions
-    .filter(x => x.type === "expense")
+  const exp = transactions.filter(x => x.type === "expense")
     .reduce((s, x) => s + Number(x.amount), 0);
 
   const groups = {};
+  transactions.filter(x => x.type === "expense").forEach(x => {
+    const category = x.category || "Other";
+    groups[category] = (groups[category] || 0) + Number(x.amount);
+  });
 
-  transactions
-    .filter(x => x.type === "expense")
-    .forEach(x => {
-      groups[x.category] =
-        (groups[x.category] || 0) + Number(x.amount);
-    });
+  const categoryRows = Object.entries(groups).sort((a, b) => b[1] - a[1]);
+  const maxCategoryAmount = Math.max(1, ...categoryRows.map(([, amount]) => amount));
+  const categoryColors = {
+    Food: "#f97316",
+    Travel: "#0ea5e9",
+    Education: "#8b5cf6",
+    Shopping: "#ec4899",
+    Bills: "#64748b",
+    Health: "#10b981",
+    Entertainment: "#eab308",
+    Other: "#6366f1"
+  };
+  const fallbackColors = ["#14b8a6", "#a855f7", "#ef4444", "#84cc16", "#3b82f6"];
+  const getCategoryColor = (category, index) =>
+    categoryColors[category] || fallbackColors[index % fallbackColors.length];
 
   function exportCSV() {
     const rows = [
       ["Date", "Title", "Category", "Type", "Amount", "Note"],
-      ...transactions.map(x => [
-        x.date,
-        x.title,
-        x.category,
-        x.type,
-        x.amount,
-        x.note
-      ])
+      ...transactions.map(x => [x.date, x.title, x.category, x.type, x.amount, x.note])
     ];
-
-    const csv = rows
-      .map(r =>
-        r.map(v =>
-          '"' + String(v ?? "").replaceAll('"', '""') + '"'
-        ).join(",")
-      )
-      .join("\n");
-
-    const url = URL.createObjectURL(
-      new Blob([csv], { type: "text/csv" })
-    );
-
+    const csv = rows.map(r =>
+      r.map(v => '"' + String(v ?? "").replaceAll('"', '""') + '"').join(",")
+    ).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     const el = document.createElement("a");
     el.href = url;
     el.download = "expense-report.csv";
     el.click();
-
     URL.revokeObjectURL(url);
   }
 
@@ -1245,41 +1250,43 @@ function Reports({ transactions }) {
     <>
       <div className="topbar">
         <h1>Reports & Insights</h1>
-
-        <button
-          className="btn primary"
-          onClick={exportCSV}
-        >
-          Export CSV
-        </button>
+        <button className="btn primary" onClick={exportCSV}>Export CSV</button>
       </div>
 
-      <div className="grid-2">
+      <section className="form-card">
+        <h2>Category-wise Spending</h2>
+        <p className="muted">Vertical chart showing total expenses in each category</p>
+        {categoryRows.length ? (
+          <div className="category-chart-vertical">
+            {categoryRows.map(([category, amount], index) => (
+              <div className="category-chart-column" key={category}>
+                <strong className="category-chart-amount">{money(amount)}</strong>
+                <div className="category-chart-column-track">
+                  <div
+                    className="category-chart-column-bar"
+                    style={{
+                      height: `${(amount / maxCategoryAmount) * 100}%`,
+                      backgroundColor: getCategoryColor(category, index)
+                    }}
+                    title={`${category}: ${money(amount)}`}
+                  />
+                </div>
+                <span className="category-chart-name">{category}</span>
+              </div>
+            ))}
+          </div>
+        ) : <div className="empty">No expense data available for the chart.</div>}
+      </section>
 
-        <section className="form-card">
-          <h2>Category Spending</h2>
-
-          {Object.keys(groups).length ? (
-            Object.entries(groups).map(([k, v]) => (
-              <p key={k}>
-                <b>{k}</b>: {money(v)}
-              </p>
-            ))
-          ) : (
-            <div className="empty">No expense data.</div>
-          )}
-        </section>
-
-        <section className="form-card">
-          <h2>Financial Summary</h2>
-
-          <p>Total income: <b>{money(inc)}</b></p>
-          <p>Total expenses: <b>{money(exp)}</b></p>
-          <p>Balance: <b>{money(inc - exp)}</b></p>
-          <p>Total transactions: <b>{transactions.length}</b></p>
-        </section>
-
-      </div>
+      <section className="form-card">
+        <h2>Financial Summary</h2>
+        <div className="summary-grid">
+          <div><span>Total income</span><strong>{money(inc)}</strong></div>
+          <div><span>Total expenses</span><strong>{money(exp)}</strong></div>
+          <div><span>Balance</span><strong>{money(inc - exp)}</strong></div>
+          <div><span>Total transactions</span><strong>{transactions.length}</strong></div>
+        </div>
+      </section>
     </>
   );
 }
@@ -1337,55 +1344,95 @@ function AdminDashboard({ users, transactions }) {
 // ==========================================
 
 function AdminUsers({ users, transactions }) {
-  const normalUsers = users.filter(
-    u => u.role !== "admin"
+  const nav = useNavigate();
+  const normalUsers = users.filter(u => u.role !== "admin");
+  return (
+    <>
+      <h1>Registered Users</h1>
+      <p className="muted">Select a user's name to view their individual transactions.</p>
+      <div className="table-wrap">
+        <table className="table">
+          <thead><tr><th>Name</th><th>Email</th><th>Created</th><th>Last Accessed Date</th><th>Last Accessed Time</th><th>Transactions</th></tr></thead>
+          <tbody>
+            {normalUsers.length ? normalUsers.map(u => (
+              <tr
+                key={u.uid}
+                className="clickable-user-row"
+                onClick={() => nav(`/admin/users/${u.uid}`)}
+                title="View this user's transactions"
+              >
+                <td><Link className="user-name-link" to={`/admin/users/${u.uid}`} onClick={e => e.stopPropagation()}>{u.name || "Unnamed user"}</Link></td>
+                <td>{u.email}</td>
+                <td>{u.createdAt?.toDate ? u.createdAt.toDate().toLocaleDateString() : "—"}</td>
+                <td>{u.lastAccessedAt?.toDate ? u.lastAccessedAt.toDate().toLocaleDateString() : "Not accessed yet"}</td>
+                <td>{u.lastAccessedAt?.toDate ? u.lastAccessedAt.toDate().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true }) : "—"}</td>
+                <td>{transactions.filter(t => t.uid === u.uid).length}</td>
+              </tr>
+            )) : <tr><td colSpan="6" className="empty">No users registered.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+// ==========================================
+// ADMIN INDIVIDUAL USER TRANSACTIONS
+// ==========================================
+
+function AdminUserTransactions({ user, transactions }) {
+  const nav = useNavigate();
+  if (!user) {
+    return (
+      <>
+        <button className="btn secondary" onClick={() => nav("/admin/users")}>Back to Users</button>
+        <section className="form-card"><h2>User not found</h2></section>
+      </>
+    );
+  }
+
+  const income = transactions.filter(t => t.type === "income")
+    .reduce((sum, t) => sum + Number(t.amount), 0);
+  const expenses = transactions.filter(t => t.type === "expense")
+    .reduce((sum, t) => sum + Number(t.amount), 0);
+  const sortedTransactions = [...transactions].sort((a, b) =>
+    String(b.date || "").localeCompare(String(a.date || ""))
   );
 
   return (
     <>
-      <h1>Registered Users</h1>
+      <div className="topbar">
+        <div>
+          <button className="btn secondary" onClick={() => nav("/admin/users")}>← Back to Users</button>
+          <h1 style={{ marginTop: 18 }}>{user.name || "User"} – Transactions</h1>
+          <p className="muted">{user.email}</p>
+        </div>
+      </div>
 
+      <div className="cards">
+        {[
+          ["Total Transactions", transactions.length],
+          ["Total Income", money(income)],
+          ["Total Expenses", money(expenses)],
+          ["Balance", money(income - expenses)]
+        ].map(([label, value]) => (
+          <div className="card" key={label}><h3>{label}</h3><div className="amount">{value}</div></div>
+        ))}
+      </div>
+
+      <h2>All Transactions of {user.name || "this user"}</h2>
       <div className="table-wrap">
         <table className="table">
-
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Created</th>
-              <th>Transactions</th>
-            </tr>
-          </thead>
-
+          <thead><tr><th>Date</th><th>Title</th><th>Category</th><th>Type</th><th>Amount</th><th>Note</th></tr></thead>
           <tbody>
-            {normalUsers.length ? (
-              normalUsers.map(u => (
-                <tr key={u.uid}>
-                  <td>{u.name}</td>
-                  <td>{u.email}</td>
-
-                  <td>
-                    {u.createdAt?.toDate
-                      ? u.createdAt.toDate().toLocaleDateString()
-                      : "—"}
-                  </td>
-
-                  <td>
-                    {transactions.filter(
-                      t => t.uid === u.uid
-                    ).length}
-                  </td>
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td colSpan="4" className="empty">
-                  No users registered.
-                </td>
+            {sortedTransactions.length ? sortedTransactions.map(t => (
+              <tr key={t.id}>
+                <td>{t.date || "—"}</td><td>{t.title || "—"}</td><td>{t.category || "—"}</td>
+                <td><span className={"badge " + t.type}>{t.type}</span></td>
+                <td>{money(t.amount)}</td><td>{t.note || "—"}</td>
               </tr>
-            )}
+            )) : <tr><td colSpan="6" className="empty">This user has not added any transactions yet.</td></tr>}
           </tbody>
-
         </table>
       </div>
     </>

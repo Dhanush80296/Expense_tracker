@@ -9,3 +9,99 @@
 .role-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .role-heading h2{margin:12px 0}
 @media(max-width:390px){.role-choices{grid-template-columns:1fr}}
+
+
+/* Vertical category-wise reports chart */
+.category-chart-vertical {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+  min-height: 310px;
+  margin-top: 26px;
+  padding: 12px 8px 0;
+  overflow-x: auto;
+  border-bottom: 2px solid #dbe2ea;
+}
+.category-chart-column {
+  display: flex;
+  flex: 1 0 76px;
+  min-width: 76px;
+  height: 290px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+.category-chart-amount {
+  color: #344054;
+  font-size: 12px;
+  text-align: center;
+  white-space: nowrap;
+}
+.category-chart-column-track {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: 48px;
+  height: 220px;
+  background: #f1f5f9;
+  border-radius: 8px 8px 0 0;
+  overflow: hidden;
+}
+.category-chart-column-bar {
+  width: 100%;
+  min-height: 4px;
+  border-radius: 7px 7px 0 0;
+  transition: height .35s ease;
+}
+.category-chart-name {
+  min-height: 34px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+.summary-grid div {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  background: #f8fafc;
+  border-radius: 10px;
+}
+.summary-grid span {
+  color: #667085;
+  font-size: 14px;
+}
+.summary-grid strong {
+  font-size: 20px;
+}
+.user-name-link {
+  color: #2563eb;
+  font-weight: bold;
+  text-decoration: none;
+}
+.user-name-link:hover {
+  text-decoration: underline;
+}
+@media(max-width: 900px) {
+  .summary-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media(max-width: 500px) {
+  .summary-grid { grid-template-columns: 1fr; }
+}
+
+.clickable-user-row { cursor: pointer; }
+.clickable-user-row:hover { background: #f1f5f9; }
+
+@media(max-width: 650px) {
+  .category-chart-vertical { gap: 12px; }
+  .category-chart-column { flex-basis: 68px; min-width: 68px; }
+  .category-chart-column-track { width: 40px; }
+}
